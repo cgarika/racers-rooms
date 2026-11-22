@@ -1,0 +1,17 @@
+{
+  "name": "racers-rooms",
+  "version": "1.0.0",
+  "description": "Self-hosted live Toy Racers for two. The server runs the table at 120 Hz and sends snapshots at 30 a second.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/gear.js && node test/physics.js && node test/flow.js && node test/roomcode.js && node test/plus.js && node test/moderation.js && TEST_PORT3=3731 node test/reactions.js && node test/voice.js && node test/friendsplayed.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.3"
+  }
+}
