@@ -16,7 +16,7 @@ for (const name of ["bath", "kitchen"]) {
     S.stepWorld(w, inp, [], true, S.P.DT);
     if (k === 1 || k === 120 || k === 240 || k === 480 || k === 960) at[k] = w.cars.map((c) => [c.x, c.y, c.h, c.vx, c.vy, c.dist]);
   }
-  out[name] = { steers, at };
+  out[name] = { steers, at, caps: w.cars.map((c) => c.cap) };   // (a bot's speed cap: its level and its own pace, set by think)
 }
 delete out.steers; delete out.at;
 const dest = path.join(wt, "Source/GameNest/Private/Tests/Fixtures/racers");
