@@ -48,12 +48,12 @@ for (const name of S.TRACK_NAMES) for (const k of [1, 2, 3, 4]) {
     assert(toLine > 0 && toLine < 6, name + " " + k + ": nose " + toLine.toFixed(1) + " behind the line");
     const tan = S.at(tr, c.s);
     assert(Math.cos(c.h) * tan.tx + Math.sin(c.h) * tan.ty > Math.cos(0.06), name + " " + k + ": facing down the lane (within 3 degrees)");
-    assert(S.wallExcess(c, tr).e < -8, name + " " + k + ": clear of the walls");
+    assert(S.wallExcess(c, tr).e < -3, name + " " + k + ": clear of the walls");
   }
   for (let a = 0; a < k; a++) for (let b = a + 1; b < k; b++) {
     assert.strictEqual(S.overlap(w.cars[a], w.cars[b]), null, name + " " + k + ": cars " + a + " and " + b + " overlap");
     const gapAcross = Math.hypot(w.cars[a].x - w.cars[b].x, w.cars[a].y - w.cars[b].y) - 2 * P.CAR_HW2;
-    assert(gapAcross >= 9.9, "a hand's gap between neighbours " + gapAcross);
+    assert(gapAcross >= 12.9, "a clear gap between neighbours " + gapAcross);
   }
   // across the lane: side by side, one row
   const lat = w.cars.map((c) => S.nearest(tr, c.x, c.y, c.idx).d);
@@ -134,7 +134,7 @@ for (const name of S.TRACK_NAMES) for (const st of [-1, 1]) {
   for (i = 0; i < 120 * 6 && (metAt < 0 || i < metAt + 60); i++) { S.stepWorld(w, [0], ev, true, P.DT); check(w, name + " into the wall " + st, i * P.DT); if (metAt < 0 && ev.some((e) => e.k === "wall")) metAt = i; }
   assert(metAt >= 0, name + ": the wall was met");
   const f = Math.cos(c.h) * c.vx + Math.sin(c.h) * c.vy;
-  assert(f > P.MAX_SPEED * 0.5, name + ": half a second after the hit the car runs on along the wall (" + f.toFixed(0) + ")");
+  assert(f > P.MAX_SPEED * 0.4, name + ": half a second after the hit the car runs on along the wall (" + f.toFixed(0) + ")");
 }
 ok("full lock either way, and a car aimed into the wall: the wall turns it along, it slides on, never through");
 

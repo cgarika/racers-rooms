@@ -57,38 +57,47 @@ const centred = (p) => { const cx = p.reduce((a, q) => a + q[0], 0) / p.length, 
 const rotateTo = (p, i) => p.slice(i).concat(p.slice(0, i));
 
 const out = {};
-// The Bathtub: round ends of radius R centred (0, -D) and (0, D), joined by the two straight diagonals that cross at the middle. The way round: down the right-to-left
-// diagonal (y grows down the screen), round the bottom end, up the other diagonal over the bridge, round the top end. The line is on the lower diagonal, just before it
-// meets the bottom end: the grid stands on the straight, clear of the bridge.
+// The Bathtub: two round-ended loops, each a tall end (an arc, a straight down each side, a half circle) joined by the two straight diagonals that cross at the middle.
+// The way round: down the right-to-left diagonal (y grows down the screen), round the bottom loop, up the other diagonal over the bridge, round the top loop.
+// The line is at the top of the bottom loop's right-hand straight (qa1126 round 2, the lead: the start where the camera sees the row side by side): the cars stand
+// four abreast across the screen, facing up it, away from the camera, and the gate stands beyond them.
 {
-  const R = 285, D = 590;
-  const th = Math.asin(R / D), hl = Math.sqrt(D * D - R * R);   // half a diagonal: from the middle to where it meets an end
-  const ux = Math.sin(th), uy = Math.cos(th);   // the diagonal from the middle toward the bottom-left end's tangent point: (-ux, uy)
+  const R = Number(process.env.BATH_R || 255), D = Number(process.env.BATH_D || 545), S = Number(process.env.BATH_S || 190);
+  const th = Math.asin(R / D), hl = Math.sqrt(D * D - R * R);   // half a diagonal: from the middle to where it meets a loop
+  const ux = Math.sin(th), uy = Math.cos(th);
   const raw = [];
   const line = (x0, y0, x1, y1) => { const L = Math.hypot(x1 - x0, y1 - y0), k = Math.ceil(L / 1); for (let i = 0; i < k; i++) raw.push([x0 + (x1 - x0) * i / k, y0 + (y1 - y0) * i / k]); };
   const arc = (cx, cy, a0, a1) => { const k = Math.ceil(Math.abs(a1 - a0) * R / 1); for (let i = 0; i < k; i++) { const a = a0 + (a1 - a0) * i / k; raw.push([cx + R * Math.cos(a), cy + R * Math.sin(a)]); } };
-  // tangent points: on the bottom end (centre (0, D)) the diagonal from the middle going down-left touches at angle -(PI - th) .. measured from +x
-  const tB1 = [-hl * ux, hl * uy];               // the down-left diagonal meets the bottom end
-  const tB2 = [hl * ux, hl * uy];                // the bottom end hands over to the up-right... (mirror)
-  const tT1 = [hl * ux, -hl * uy], tT2 = [-hl * ux, -hl * uy];
+  const tB1 = [-hl * ux, hl * uy], tB2 = [hl * ux, hl * uy], tT1 = [hl * ux, -hl * uy], tT2 = [-hl * ux, -hl * uy];
   const ang = (p, c) => Math.atan2(p[1] - c[1], p[0] - c[0]);
-  line(0 + hl * ux, -hl * uy, tB1[0], tB1[1]);          // from the top-right tangent point down through the middle to the bottom-left one
-  { const c = [0, D]; let a0 = ang(tB1, c), a1 = ang(tB2, c); while (a1 > a0) a1 -= 2 * Math.PI; arc(c[0], c[1], a0, a1); }   // round the bottom end (clockwise on screen)
-  line(tB2[0], tB2[1], tT2[0], tT2[1]);                 // up through the middle (the bridge) to the top-left
-  { const c = [0, -D]; let a0 = ang(tT2, c), a1 = ang(tT1, c); while (a1 < a0) a1 += 2 * Math.PI; arc(c[0], c[1], a0, a1); }   // round the top end
+  line(tT1[0], tT1[1], tB1[0], tB1[1]);                                        // the first diagonal, down through the middle
+  arc(0, D, ang(tB1, [0, D]), -Math.PI);                                       // round to the bottom loop's left side
+  line(-R, D, -R, D + S);                                                      // down its left straight
+  arc(0, D + S, Math.PI, 0);                                                   // round its far end (through the bottom)
+  line(R, D + S, R, D);                                                        // up its right straight (the grid and the line)
+  arc(0, D, 0, ang(tB2, [0, D]));                                              // round to the second diagonal
+  line(tB2[0], tB2[1], tT2[0], tT2[1]);                                        // up through the middle, over the bridge
+  arc(0, -D, ang(tT2, [0, -D]), Math.PI);                                      // round to the top loop's left side
+  line(-R, -D, -R, -D - S);                                                    // up its left straight
+  arc(0, -D - S, Math.PI, 2 * Math.PI);                                        // round its far end (through the top)
+  line(R, -D - S, R, -D);                                                      // down its right straight
+  arc(0, -D, 0, ang(tT1, [0, -D]));                                            // round to the first diagonal
   let pts = resample(smooth(resample(raw, 2), 30, 6), SP);
-  pts = centred(pts);
   const n = pts.length, sp = perimeter(pts) / n;
+  // the line: on the bottom loop's right straight, LINE_UP short of its top (in the raw frame: x = R, y = D + LINE_UP)
+  const LINE_UP = 45;
+  let start = 0, bd = 1e9;
+  for (let i = 0; i < n; i++) { const d = Math.hypot(pts[i][0] - R, pts[i][1] - (D + LINE_UP)); if (d < bd) { bd = d; start = i; } }
+  pts = rotateTo(pts, start);
+  pts = centred(pts);
   // where the passes cross
   let cross = null, cd = 1e9;
   for (let i = 0; i < n; i++) for (let j = i + 150; j < n - 150; j++) { const d = Math.hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1]); if (d < cd) { cd = d; cross = [i, j]; } }
-  // the line: on the first diagonal (the lower pass), LINE_AT past the crossing
-  const LINE_AT = 430;
-  const start = (cross[0] + Math.round(LINE_AT / sp)) % n;
-  pts = rotateTo(pts, start);
-  const c0 = (cross[0] - start + n) % n, c1 = (cross[1] - start + n) % n;
-  const BR = 560;   // the bridge: the second pass, this far each side of the crossing (its ramps take the outer RAMP2 of it)
-  out.bath = { pts, bridge: [Math.round(c1 * sp - BR), Math.round(c1 * sp + BR)], crossAt: [c0 * sp, c1 * sp] };
+  const c0 = cross[0], c1 = cross[1];
+  // the bridge is the second pass over the middle: the one the cars take after the line (the first diagonal after the start is the bridge's)
+  const BR = 560;   // this far each side of the crossing (its ramps take the outer RAMP2 of it)
+  const cb = c0 * sp < 2 * hl + 400 ? c0 : c1;
+  out.bath = { pts, bridge: [Math.round(cb * sp - BR), Math.round(cb * sp + BR)], crossAt: [c0 * sp, c1 * sp] };
 }
 const CONTROL = {
   // Breakfast Speedway: a tall loop round the table, its right side bitten in (a long sweeping chicane)

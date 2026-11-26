@@ -38,7 +38,7 @@ const P = Object.freeze({
   WALL_E: 0.2,               // what a wall gives back of the speed into it
   WALL_SCRAPE: 0.6,          // the share of the speed along the wall a full-on hit takes off (a glance takes little)
   WALL_TURN: 0.45,           // how much of the angle into the wall a hit turns the car (it glances off along it)
-  GRID_PITCH2: 72,           // the cars' centres across the line: a car's width and a hand's gap
+  GRID_PITCH2: 75,           // the cars' centres across the line: a car's width and a clear gap (13) between neighbours
   GRID_BACK2: 2,             // the noses this far behind the line
   RAMP2: 300,
   BOX_LAT2: 72,              // the item boxes this far either side of the middle
@@ -276,7 +276,14 @@ function onTwoLevels(tr, A, B) {
   let ds = Math.abs(A.s - B.s); if (ds > tr.L / 2) ds = tr.L - ds;
   return ds > 4 * P.CAR_HL2 && Math.abs(heightAt(tr, A.s) - heightAt(tr, B.s)) > 40;
 }
-function bump2(w, ev) {
+/* How deep two footprints overlap along one axis (n, unit): their projections' overlap. */
+function depthAlong(a, b, nx, ny) {
+  const ha = [Math.cos(a.h), Math.sin(a.h)], hb = [Math.cos(b.h), Math.sin(b.h)], A = P.CAR_HL2, Bw = P.CAR_HW2;
+  const ra = A * Math.abs(ha[0] * nx + ha[1] * ny) + Bw * Math.abs(-ha[1] * nx + ha[0] * ny);
+  const rb = A * Math.abs(hb[0] * nx + hb[1] * ny) + Bw * Math.abs(-hb[1] * nx + hb[0] * ny);
+  return ra + rb - Math.abs((b.x - a.x) * nx + (b.y - a.y) * ny);
+}
+function bump2(w, ev, round) {
   const cs = w.cars;
   let any = false;
   for (let a = 0; a < cs.length; a++) for (let b = a + 1; b < cs.length; b++) {
@@ -286,13 +293,22 @@ function bump2(w, ev) {
     const ov = overlap(A, B);
     if (!ov) continue;
     any = true; A.jam = B.jam = true;
-    const { nx, ny, o } = ov;
+    let { nx, ny, o } = ov;
+    if (round >= 6) {
+      // a jam that the pushes across have not cleared (cars side by side pressed between the walls, a shield that will not give): part them along the lane,
+      // the one behind back, the one ahead on, which there is always room for
+      let ds = B.s - A.s; if (ds > w.track.L / 2) ds -= w.track.L; else if (ds < -w.track.L / 2) ds += w.track.L;
+      const t = w.track.tan[A.idx], sg = ds >= 0 ? 1 : -1;
+      nx = t[0] * sg; ny = t[1] * sg;
+      o = Math.max(0, depthAlong(A, B, nx, ny));   // (the whole depth along that axis: one push parts them)
+    }
     const sa = A.shield > 0 && !(B.shield > 0), sb = B.shield > 0 && !(A.shield > 0);   // (two shields meet as two cars)
     let wa = sa ? 0 : sb ? 2 : 1, wb = sb ? 0 : sa ? 2 : 1;
     // a car pressed against a wall cannot give way toward it: the other takes the whole push
     const pinned = (c, dx, dy) => { const e = wallExcess(c, w.track); return e.e > -0.6 && dx * e.nx + dy * e.ny > 0.2; };
     const pa = pinned(A, -nx, -ny), pb = pinned(B, nx, ny);
     if (pa && !pb) { wa = 0; wb = wb || 1; } else if (pb && !pa) { wb = 0; wa = wa || 1; }
+    if (round >= 6) { wa = wa || 1; wb = wb || 1; }   // (along the lane nobody is pinned: both give way)
     const tot = wa + wb || 1, push = o + 0.05;
     A.x -= nx * push * wa / tot; A.y -= ny * push * wa / tot;
     B.x += nx * push * wb / tot; B.y += ny * push * wb / tot;
@@ -310,19 +326,19 @@ function bump2(w, ev) {
 }
 /* After the bumps: the walls again (a bump may push a car into one) and the bumps again, until nothing overlaps (a few rounds at most). */
 function settle2(w, ev) {
-  for (let round = 0; round < 32; round++) {   // (a row of cars pressed between the walls passes a push along it a car a round)
+  for (let round = 0; round < 48; round++) {   // (a row of cars pressed between the walls passes a push along it a car a round)
     for (const c of w.cars) c.jam = false;
-    const any = bump2(w, round === 0 ? ev : null);
+    const any = bump2(w, round === 0 ? ev : null, round);
     if (!any) break;
     for (const c of w.cars) {
       if (c.fall >= 0) continue;
       const nr = nearest(w.track, c.x, c.y, c.idx); c.idx = nr.i;
-      if (c.jam && round >= 4) {
+      if (c.jam && round >= 2) {
         // a jam across the lane (cars side by side pressed between the walls, turned across it): the squeeze straightens them along the lane, so they fit
         const t = w.track.tan[nr.i], hx = Math.cos(c.h), hy = Math.sin(c.h), sg = hx * t[0] + hy * t[1] >= 0 ? 1 : -1;
         let d = Math.atan2(t[1] * sg, t[0] * sg) - c.h;
         while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
-        c.h += d * 0.3;
+        c.h += d * 0.4;
       }
       walls(c, w.track, null);
     }
