@@ -2,7 +2,7 @@
    and presses its item when it pays. It gives a steer in -1..1 and changes only `mem`; the level sets how far ahead it looks, how well it holds the line,
    how fast it may go and how it uses what it picked up. Pure. */
 "use strict";
-const { P, at, clamp } = require("./physics");
+const { P, at, clamp, nearest } = require("./physics");
 
 const LEVELS = ["easy", "normal", "hard"];
 const seatPhase = (mem) => mem.seat * 1.7;
@@ -42,10 +42,12 @@ function think(w, car, level, mem, dt) {
   while (bend > Math.PI) bend -= 2 * Math.PI; while (bend < -Math.PI) bend += 2 * Math.PI;
   const p = at(tr, car.s + look);
   // the inside of the bend: toward the side it turns to (the right-hand normal of the heading is (-ty, tx); a right turn is a positive bend in y-down)
-  let off = clamp(bend * 88, -P.HALF_W * 0.55, P.HALF_W * 0.55) * K.line;
-  if (w.t >= mem.wobbleAt) { mem.wobbleAt = w.t + 0.6; mem.wobble = (rnd(mem) - 0.5) * 2 * K.noise * P.HALF_W; }
-  off += mem.wobble + (mem.lane + Math.sin(w.t * mem.swayRate + seatPhase(mem)) * 0.18) * P.HALF_W * K.spread;
-  off = clamp(off, -P.HALF_W * 0.72, P.HALF_W * 0.72);
+  const HW = tr.halfW || P.HALF_W;
+  let off = clamp(bend * 88, -HW * 0.55, HW * 0.55) * K.line;
+  if (w.t >= mem.wobbleAt) { mem.wobbleAt = w.t + 0.6; mem.wobble = (rnd(mem) - 0.5) * 2 * K.noise * HW; }
+  off += mem.wobble + (mem.lane + Math.sin(w.t * mem.swayRate + seatPhase(mem)) * 0.18) * HW * K.spread;
+  if (tr.geo === 2) off += passLine(w, car, tr, off, mem);
+  off = clamp(off, -HW * 0.72, HW * 0.72);
   const tx = p.x - p.ty * off, ty = p.y + p.tx * off;
   const want = Math.atan2(ty - car.y, tx - car.x);
   let d = want - car.h; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
@@ -57,6 +59,23 @@ function think(w, car, level, mem, dt) {
     if (w.t >= mem.itemAt && (car.item === 2 || Math.abs(bend) < 0.25)) { use = true; mem.itemAt = -1; }
   }
   return { steer: mem.steer, use };
+}
+
+/* Geometry 2: a car a little way ahead on the line this bot wants is passed on the side with more room (eased, so the bot does not twitch). Returns the change to the line. */
+function passLine(w, car, tr, off, mem) {
+  let want = 0;
+  for (const o of w.cars) {
+    if (o === car || o.fall >= 0) continue;
+    let ds = o.s - car.s; if (ds > tr.L / 2) ds -= tr.L; else if (ds < -tr.L / 2) ds += tr.L;
+    if (ds < 40 || ds > 230) continue;
+    const them = nearest(tr, o.x, o.y, o.idx, 12);
+    if (Math.abs(them.d - off) > P.CAR_HW2 * 2 + 14) continue;   // not on my line
+    // round the side with more room between them and the wall
+    const side = them.d > 0 ? -1 : 1;
+    want += side * (P.CAR_HW2 * 2 + 18) * (1 - (ds - 40) / 190);
+  }
+  mem.pass = (mem.pass || 0) + (want - (mem.pass || 0)) * 0.08;
+  return mem.pass;
 }
 
 module.exports = { LEVELS, SKILL, newMem, think };

@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/gear.js && node test/physics.js && node test/flow.js && node test/roomcode.js && node test/plus.js && node test/moderation.js && TEST_PORT3=3731 node test/reactions.js && node test/voice.js && node test/friendsplayed.js"
+    "test": "node test/gear.js && node test/physics.js && node test/geo2.js && node test/geo2flow.js && node test/flow.js && node test/roomcode.js && node test/plus.js && node test/moderation.js && TEST_PORT3=3731 node test/reactions.js && node test/voice.js && node test/friendsplayed.js"
   },
   "dependencies": {
     "express": "^5.2.1",

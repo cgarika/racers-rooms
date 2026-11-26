@@ -47,7 +47,8 @@ const ROOM_IDLE_MS = 2 * 3600e3;
 const TRIAL_MAX_S = Math.max(1, Number(process.env.TRIAL_MAX_S || 75));          // a time trial's turn: this many seconds a lap at most, then it is given up
 const SNAP_EVERY = Math.max(1, Number(process.env.SNAP_EVERY || 4));            // one snapshot every 4 steps of 1/120 s: 30 a second
 const NAME_GRAPHEMES = 18;             // one cap on every GameNest server, in whole characters
-const CAPS = [];
+/* What an app may say it knows ("caps" on create and join). "grid4" (qa1126): the wide tracks with walls and four cars abreast on the line (physics.js geometry 2). */
+const CAPS = ["grid4"];
 const LAPS = [1, 2, 3, 5];
 const TRACKS = ["bath", "kitchen", "toyroom"];   // Bathtub Grand Prix (free), Breakfast Speedway and Midnight Toy Room (GameNest Plus)
 const LEVELS = Bots.LEVELS;
@@ -192,7 +193,7 @@ function publicRoom(room) {
     gearOn: room.gearOn !== false,
     minPlayers: MIN_PLAYERS, maxPlayers: MAX_PLAYERS,
     opts: { laps: room.opts.laps, track: room.opts.track },
-    track: { n: Sim.TRACKS[room.opts.track].n, len: Math.round(Sim.TRACKS[room.opts.track].L), halfW: Sim.P.HALF_W },
+    track: trackView(room),
     phase: room.phase, phaseEndsAt: room.phaseEndsAt,
     places: room.places, winner: room.winner,
     results: (room.results || []).map((r) => ({ seat: r.seat, ms: r.ms, best: r.best })),
@@ -206,6 +207,18 @@ function publicRoom(room) {
     ...Played.view(room, "racers"),   // Friends (2026-11-19): reports a finished game once; adds no field
     ...PassPlay.view(room),   // pass-and-play: which seats this phone plays
   };
+}
+
+/* The geometry a race in this room plays (physics.js): the wide one, with walls and four abreast on the line, when every person in the room has an app that knows it
+   ("grid4" in its caps); else the first one, which every app knows. A race keeps the geometry it started with. */
+function geoFor(room) {
+  const people = room.players.filter((p) => !p.bot && !p.local && !p.left);
+  return people.length > 0 && people.every((p) => Array.isArray(p.caps) && p.caps.includes("grid4")) ? 2 : 1;
+}
+/* The room's track as the apps draw it: its points' count and length, its half width and its geometry (an old app reads n, len and halfW; a new one geo too). */
+function trackView(room) {
+  const tr = room.world ? room.world.track : Sim.trackOf(room.opts.track, geoFor(room));
+  return { n: tr.n, len: Math.round(tr.L), halfW: tr.halfW, geo: tr.geo };
 }
 
 function sendState(code) {
@@ -249,7 +262,7 @@ function startMatch(room) {
   }
   room.trial = null;
   gearBots(room);
-  room.world = Sim.newWorld(room.opts.track, room.opts.laps, room.players.length);
+  room.world = Sim.newWorld(room.opts.track, room.opts.laps, room.players.length, geoFor(room));
   for (const c of room.world.cars) { c.fx = gearOf(room, room.players[c.seat]); c.lapsSeen = 0; c.lapStart = 0; c.lapBest = 0; }   // gear: the seat's engine, tyres and boost (null at the base)
   setPhase(room, "countdown", COUNTDOWN_MS);
   room.log = `Get ready! ${room.opts.laps} lap${room.opts.laps === 1 ? "" : "s"}.`;
@@ -258,7 +271,7 @@ function startMatch(room) {
 /* A time trial's turn: one car alone, its seat's. */
 function startTurn(room) {
   const seat = room.trial.order[room.trial.turn];
-  room.world = Sim.newWorld(room.opts.track, room.opts.laps, 1);
+  room.world = Sim.newWorld(room.opts.track, room.opts.laps, 1, geoFor(room));
   const c = room.world.cars[0];
   c.seat = seat; c.lapsSeen = 0; c.lapStart = 0; c.lapBest = 0;
   room.firstHomeAt = 0;
@@ -770,7 +783,7 @@ io.on("connection", (socket) => {
       c.x = p.x - p.ty * -lane; c.y = p.y + p.tx * -lane; c.h = Math.atan2(p.ty, p.tx); c.s = s; c.idx = Math.round(s / w.track.sp) % w.track.n;
       c.dist = w.laps * L - toGo; c.lastOk = s; c.lapsSeen = w.laps - 1; c.vx = Math.cos(c.h) * 60; c.vy = Math.sin(c.h) * 60;
     };
-    if (o.nearFinish) w.cars.forEach((c, i) => placeCar(c, 130 + i * 26, (i % 2 ? 1 : -1) * 6));
+    if (o.nearFinish) w.cars.forEach((c, i) => (w.geo === 2 ? placeCar(c, 130, (i - (w.cars.length - 1) / 2) * Sim.P.GRID_PITCH2) : placeCar(c, 130 + i * 26, (i % 2 ? 1 : -1) * 6)));   // (geometry 2: side by side, never on top of each other)
     if (Array.isArray(o.place) && o.place.length === 2) { const c = w.cars.find((q) => q.seat === o.place[0]); if (c) placeCar(c, o.place[1], 0); }
     if (Array.isArray(o.botControlled)) o.botControlled.slice(0, 4).forEach((b, i) => { if (room.players[i] && !room.players[i].bot) room.players[i].botControlled = !!b; });
     if (o.phase === "race" && room.status === "playing" && room.phase === "countdown") setPhase(room, "race", null);

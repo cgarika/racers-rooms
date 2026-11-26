@@ -3,7 +3,11 @@
 
    Units: centimetres-ish "u" and seconds; one step is 1/120 s. A track is a closed loop of evenly spaced centreline points (tracks.json, the same
    points the app has in RacersTracks.inl), HALF_W each side of it. A car accelerates on its own to MAX_SPEED; the only input is a steer in -1..1.
-   Falling off the edge respawns you on the track after a moment. Boost pads, item boxes (boost or shield), drift mini-boosts, bumping. */
+   Falling off the edge respawns you on the track after a moment. Boost pads, item boxes (boost or shield), drift mini-boosts, bumping.
+
+   Geometry 2 (qa1126, the owner: "cars should start from the start line together" and "car and walls are overlapping"): wider tracks (tracks.json tracks2, HALF_W2 each side)
+   with solid walls, a car's real footprint (an oriented box CAR_L2 by CAR_W2, the size of the drawn body) kept inside the walls and clear of the other cars every step,
+   and four cars abreast on the start line. A room plays it when every person's app says so ("grid4" in its caps, server.js); the first geometry stays as it was. */
 "use strict";
 const DATA = require("./tracks.json");
 
@@ -29,17 +33,30 @@ const P = Object.freeze({
   RESTITUTION: 0.55,
   RAMP: 330,                 // a bridge rises and falls over this much track at each end
   BRIDGE_H: 90,
+  // geometry 2: the footprint (half its length and half its width: the drawn car, wheels and all, is 125 by 61), the walls, the grid
+  CAR_HL2: 63, CAR_HW2: 31,
+  WALL_E: 0.2,               // what a wall gives back of the speed into it
+  WALL_SCRAPE: 0.6,          // the share of the speed along the wall a full-on hit takes off (a glance takes little)
+  WALL_TURN: 0.45,           // how much of the angle into the wall a hit turns the car (it glances off along it)
+  GRID_PITCH2: 72,           // the cars' centres across the line: a car's width and a hand's gap
+  GRID_BACK2: 2,             // the noses this far behind the line
+  RAMP2: 300,
+  BOX_LAT2: 72,              // the item boxes this far either side of the middle
 });
 
-const TRACKS = {};
-for (const [name, t] of Object.entries(DATA.tracks)) TRACKS[name] = makeTrack(name, t.pts);
-const TRACK_NAMES = Object.keys(TRACKS);
-
-/* Pads and boxes: where along a lap (a fraction of its length) and how far off the centre. */
+/* Pads and boxes: where along a lap (a fraction of its length) and how far off the centre (geometry 2: BOX_LAT2). */
 const PADS = [[0.17, 0], [0.50, 0], [0.82, 0]];
 const BOXES = [[0.11, -30], [0.11, 30], [0.40, -30], [0.40, 30], [0.69, -30], [0.69, 30]];
 
-function makeTrack(name, pts) {
+const TRACKS = {}, TRACKS2 = {};
+for (const [name, t] of Object.entries(DATA.tracks)) TRACKS[name] = makeTrack(name, t.pts, t.bridge, 1);
+for (const [name, t] of Object.entries(DATA.tracks2)) TRACKS2[name] = makeTrack(name, t.pts, t.bridge, 2);
+const TRACK_NAMES = Object.keys(TRACKS);
+/* A track by its name and geometry (1, the first; 2, the wide one); the Bathtub when the name is not one. */
+const trackOf = (name, geo) => (geo === 2 ? TRACKS2[name] || TRACKS2.bath : TRACKS[name] || TRACKS.bath);
+
+
+function makeTrack(name, pts, bridge, geo) {
   const n = pts.length, tan = [];
   let L = 0;
   for (let i = 0; i < n; i++) L += Math.hypot(pts[(i + 1) % n][0] - pts[i][0], pts[(i + 1) % n][1] - pts[i][1]);
@@ -48,7 +65,8 @@ function makeTrack(name, pts) {
     const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.hypot(dx, dy) || 1;
     tan.push([dx / d, dy / d]);
   }
-  return { name, pts, tan, n, L, sp: L / n, bridge: DATA.tracks[name].bridge || null };
+  return { name, pts, tan, n, L, sp: L / n, bridge: bridge || null, geo, halfW: geo === 2 ? DATA.halfW2 : DATA.halfW, ramp: geo === 2 ? P.RAMP2 : P.RAMP,
+    boxes: geo === 2 ? BOXES.map((b) => [b[0], Math.sign(b[1]) * P.BOX_LAT2]) : BOXES };
 }
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -57,7 +75,7 @@ function heightAt(tr, s) {
   if (!tr.bridge) return 0;
   const x = ((s % tr.L) + tr.L) % tr.L, a = tr.bridge[0], b = tr.bridge[1];
   if (x <= a || x >= b) return 0;
-  const k = Math.min(1, (x - a) / P.RAMP, (b - x) / P.RAMP);
+  const k = Math.min(1, (x - a) / tr.ramp, (b - x) / tr.ramp);
   return P.BRIDGE_H * k * k * (3 - 2 * k);
 }
 const wrapS = (s, L) => ((s % L) + L) % L;
@@ -73,8 +91,8 @@ function at(tr, s) {
 }
 
 /* The nearest centreline point to (x, y), looked for round a hint index: { i, s, d } where d is the signed distance (right of the heading is positive). */
-function nearest(tr, x, y, hint) {
-  const W = 40, n = tr.n;
+function nearest(tr, x, y, hint, win) {
+  const W = win || 40, n = tr.n;
   let best = 1e18, bi = hint, bt = 0;
   for (let k = -W; k <= W; k++) {
     const i = (((hint + k) % n) + n) % n, j = (i + 1) % n;
@@ -91,7 +109,20 @@ function nearest(tr, x, y, hint) {
   return { i: bi, s: (bi + bt) * tr.sp, d: side, dist: Math.sqrt(best) };
 }
 
-function newCar(seat, tr, slotCount) {
+function newCar(seat, tr, count) {
+  if (tr.geo === 2) {
+    /* Geometry 2: every car on the line, side by side, noses GRID_BACK2 behind it, facing down the lane; the field centred across the lane (two cars take the middle two places). */
+    /* (all parallel, square to the line, as a real grid: on the straight the line stands on, each is on its lane's heading) */
+    const k = Math.max(1, Math.min(4, count || 4));
+    const lane = (seat - (k - 1) / 2) * P.GRID_PITCH2, back = P.GRID_BACK2 + P.CAR_HL2;
+    const c = at(tr, 0);
+    const x = c.x - c.ty * lane - c.tx * back, y = c.y + c.tx * lane - c.ty * back;
+    const nr = nearest(tr, x, y, Math.round((tr.L - back) / tr.sp) % tr.n);
+    return {
+      seat, x, y, h: Math.atan2(c.ty, c.tx), vx: 0, vy: 0, steer: 0, boost: 0, shield: 0, item: 0, drift: 0,
+      idx: nr.i, s: nr.s, dist: nr.s - tr.L, fall: -1, ghost: 0, finishAt: -1, lastOk: nr.s, hits: 0,
+    };
+  }
   /* The grid (the app draws the same boxes: Grid* in RacersSim.h): a car is about 70 wide and 156 long, on a lane 120 wide, so two abreast cannot be:
      the cars stand staggered one behind another, a box 170 apart, left lane then right lane (a real grid), each centred in its own box on the lane's heading. */
   const lane = seat % 2 === 0 ? -22 : 22;
@@ -103,10 +134,10 @@ function newCar(seat, tr, slotCount) {
     idx: Math.round(s / tr.sp) % tr.n, s, dist: s - tr.L, fall: -1, ghost: 0, finishAt: -1, lastOk: s, hits: 0,
   };
 }
-function newWorld(trackName, laps, seats) {
-  const tr = TRACKS[trackName] || TRACKS.bath;
-  const w = { track: tr, laps: laps || P.LAPS, cars: [], boxes: BOXES.map(() => 0), t: 0 };
-  for (let i = 0; i < seats; i++) w.cars.push(newCar(i, tr));
+function newWorld(trackName, laps, seats, geo) {
+  const tr = trackOf(trackName, geo === 2 ? 2 : 1);
+  const w = { track: tr, geo: tr.geo, laps: laps || P.LAPS, cars: [], boxes: BOXES.map(() => 0), t: 0 };
+  for (let i = 0; i < seats; i++) w.cars.push(newCar(i, tr, seats));
   return w;
 }
 
@@ -161,16 +192,142 @@ function stepCar(c, input, dt, w, ev, racing) {
   if (ds > tr.L / 2) ds -= tr.L; else if (ds < -tr.L / 2) ds += tr.L;
   c.s = nr.s; c.dist += ds;
   const off = Math.abs(nr.d);
-  if (off <= P.HALF_W) c.lastOk = c.s;
-  if (off > P.HALF_W + P.EDGE) { c.fall = 0; if (ev) ev.push({ k: "fall", seat: c.seat }); return; }
+  if (tr.geo === 2) { walls(c, tr, ev); c.lastOk = c.s; }   // geometry 2: the walls hold every corner of the car on the lane; nobody falls
+  else {
+    if (off <= P.HALF_W) c.lastOk = c.s;
+    if (off > P.HALF_W + P.EDGE) { c.fall = 0; if (ev) ev.push({ k: "fall", seat: c.seat }); return; }
+  }
   // pads
   for (let i = 0; i < PADS.length; i++) {
     const ps = PADS[i][0] * tr.L;
     let dd = Math.abs(wrapS(c.s - ps + tr.L / 2, tr.L) - tr.L / 2);
-    if (dd < P.PAD_R && Math.abs(nr.d - PADS[i][1]) < P.HALF_W) {
+    if (dd < P.PAD_R && Math.abs(nr.d - PADS[i][1]) < tr.halfW) {
       if (c.boost < P.PAD_BOOST * 0.7) { c.boost = P.PAD_BOOST * gb; if (ev) ev.push({ k: "pad", seat: c.seat }); }
     }
   }
+}
+
+/* ---- geometry 2: the footprint, the walls, two cars meeting ---- */
+
+const CORNERS = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+/* The four corners of a car's footprint (its heading h, half length CAR_HL2 along it, half width CAR_HW2 across). */
+function corners(c) {
+  const hx = Math.cos(c.h), hy = Math.sin(c.h), a = P.CAR_HL2, b = P.CAR_HW2;
+  return CORNERS.map(([u, v]) => [c.x + hx * u * a - hy * v * b, c.y + hy * u * a + hx * v * b]);
+}
+/* How far the car's worst corner is past a wall (0 or less: inside), and the wall's outward normal there. Corners are looked for round the car's own place on the
+   lane, so under the bridge a car is held by its own lane's walls, not the other pass's. */
+function wallExcess(c, tr) {
+  let worst = -1e9, nx = 0, ny = 0;
+  for (const [px, py] of corners(c)) {
+    const nr = nearest(tr, px, py, c.idx, 30);
+    const e = Math.abs(nr.d) - tr.halfW;
+    if (e > worst) { worst = e; const t = tr.tan[nr.i], sg = nr.d > 0 ? 1 : -1; nx = -t[1] * sg; ny = t[0] * sg; }
+  }
+  return { e: worst, nx, ny };
+}
+/* The walls: a car whose footprint has gone past one is turned a little along it (a glance, more for a harder hit), put back inside, and loses the speed into the
+   wall (WALL_E of it comes back) and some along it (a scrape). */
+function walls(c, tr, ev) {
+  let hit = 0, first = true;
+  for (let it = 0; it < 8; it++) {
+    const w = wallExcess(c, tr);
+    if (w.e <= 0) break;
+    if (first) {
+      // the hit: the speed into the wall goes (WALL_E of it comes back), and the car is turned along the wall (more for a harder hit)
+      first = false;
+      const vn = c.vx * w.nx + c.vy * w.ny;
+      if (vn > 0) { c.vx -= (1 + P.WALL_E) * vn * w.nx; c.vy -= (1 + P.WALL_E) * vn * w.ny; hit = vn; }
+      const hx = Math.cos(c.h), hy = Math.sin(c.h);
+      if (hx * w.nx + hy * w.ny > 0) {
+        const tx = -w.ny, ty = w.nx, sg = hx * tx + hy * ty >= 0 ? 1 : -1;   // the wall's own way, the one nearer the car's heading
+        let d = Math.atan2(ty * sg, tx * sg) - c.h;
+        while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+        c.h += d * clamp(P.WALL_TURN * Math.max(0.3, Math.max(0, vn) / (P.MAX_SPEED * 0.5)), 0, 0.8);
+        continue;   // (turning moved the corners: measure again)
+      }
+    }
+    c.x -= w.nx * (w.e + 0.02); c.y -= w.ny * (w.e + 0.02);
+  }
+  if (hit > 0) {
+    const sp = Math.hypot(c.vx, c.vy), k = 1 - P.WALL_SCRAPE * clamp(hit / (sp + hit + 1e-6), 0, 1);
+    c.vx *= k; c.vy *= k;
+    if (ev && hit > 25) ev.push({ k: "wall", seat: c.seat, s: Math.min(1, hit / 150), x: c.x, y: c.y });
+  }
+  return hit;
+}
+/* Two footprints: the overlap along the axis it is least (n points from a to b), or null when they are apart. */
+function overlap(a, b) {
+  const ha = [Math.cos(a.h), Math.sin(a.h)], hb = [Math.cos(b.h), Math.sin(b.h)];
+  const axes = [ha, [-ha[1], ha[0]], hb, [-hb[1], hb[0]]];
+  const dx = b.x - a.x, dy = b.y - a.y, A = P.CAR_HL2, B = P.CAR_HW2;
+  let best = 1e9, nx = 0, ny = 0;
+  for (const [ux, uy] of axes) {
+    const ra = A * Math.abs(ha[0] * ux + ha[1] * uy) + B * Math.abs(-ha[1] * ux + ha[0] * uy);
+    const rb = A * Math.abs(hb[0] * ux + hb[1] * uy) + B * Math.abs(-hb[1] * ux + hb[0] * uy);
+    const dn = dx * ux + dy * uy, o = ra + rb - Math.abs(dn);
+    if (o <= 0) return null;
+    if (o < best) { best = o; const sg = dn >= 0 ? 1 : -1; nx = ux * sg; ny = uy * sg; }
+  }
+  return { o: best, nx, ny };
+}
+/* One car on the bridge and the other on the pass beneath it (far apart along the lap, and their lanes 40 or more apart in height); two on the same ramp meet. */
+function onTwoLevels(tr, A, B) {
+  let ds = Math.abs(A.s - B.s); if (ds > tr.L / 2) ds = tr.L - ds;
+  return ds > 4 * P.CAR_HL2 && Math.abs(heightAt(tr, A.s) - heightAt(tr, B.s)) > 40;
+}
+function bump2(w, ev) {
+  const cs = w.cars;
+  let any = false;
+  for (let a = 0; a < cs.length; a++) for (let b = a + 1; b < cs.length; b++) {
+    const A = cs[a], B = cs[b];
+    if (A.fall >= 0 || B.fall >= 0) continue;
+    if (onTwoLevels(w.track, A, B)) continue;
+    const ov = overlap(A, B);
+    if (!ov) continue;
+    any = true; A.jam = B.jam = true;
+    const { nx, ny, o } = ov;
+    const sa = A.shield > 0 && !(B.shield > 0), sb = B.shield > 0 && !(A.shield > 0);   // (two shields meet as two cars)
+    let wa = sa ? 0 : sb ? 2 : 1, wb = sb ? 0 : sa ? 2 : 1;
+    // a car pressed against a wall cannot give way toward it: the other takes the whole push
+    const pinned = (c, dx, dy) => { const e = wallExcess(c, w.track); return e.e > -0.6 && dx * e.nx + dy * e.ny > 0.2; };
+    const pa = pinned(A, -nx, -ny), pb = pinned(B, nx, ny);
+    if (pa && !pb) { wa = 0; wb = wb || 1; } else if (pb && !pa) { wb = 0; wa = wa || 1; }
+    const tot = wa + wb || 1, push = o + 0.05;
+    A.x -= nx * push * wa / tot; A.y -= ny * push * wa / tot;
+    B.x += nx * push * wb / tot; B.y += ny * push * wb / tot;
+    const rv = (B.vx - A.vx) * nx + (B.vy - A.vy) * ny;
+    if (rv < 0) {
+      const j = -(1 + P.RESTITUTION) * rv / 2;
+      A.vx -= nx * j * wa; A.vy -= ny * j * wa; B.vx += nx * j * wb; B.vy += ny * j * wb;
+      if (ev && rv < -8 && !(A.lastHit > w.t - 0.25 && A.lastHitWith === B.seat)) {
+        A.lastHit = w.t; A.lastHitWith = B.seat;
+        ev.push({ k: "hit", seat: A.seat, other: B.seat, s: Math.min(1, -rv / 80), x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 });
+      }
+    }
+  }
+  return any;
+}
+/* After the bumps: the walls again (a bump may push a car into one) and the bumps again, until nothing overlaps (a few rounds at most). */
+function settle2(w, ev) {
+  for (let round = 0; round < 32; round++) {   // (a row of cars pressed between the walls passes a push along it a car a round)
+    for (const c of w.cars) c.jam = false;
+    const any = bump2(w, round === 0 ? ev : null);
+    if (!any) break;
+    for (const c of w.cars) {
+      if (c.fall >= 0) continue;
+      const nr = nearest(w.track, c.x, c.y, c.idx); c.idx = nr.i;
+      if (c.jam && round >= 4) {
+        // a jam across the lane (cars side by side pressed between the walls, turned across it): the squeeze straightens them along the lane, so they fit
+        const t = w.track.tan[nr.i], hx = Math.cos(c.h), hy = Math.sin(c.h), sg = hx * t[0] + hy * t[1] >= 0 ? 1 : -1;
+        let d = Math.atan2(t[1] * sg, t[0] * sg) - c.h;
+        while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+        c.h += d * 0.3;
+      }
+      walls(c, w.track, null);
+    }
+  }
+  for (const c of w.cars) delete c.jam;
 }
 
 function respawn(c, tr, ev) {
@@ -212,13 +369,13 @@ function stepWorld(w, inputs, ev, racing, dt) {
   const tr = w.track;
   for (const c of w.cars) stepCar(c, inputs[c.seat] || 0, dt, w, ev, racing);
   if (racing) {
-    bump(w, ev);
+    if (tr.geo === 2) settle2(w, ev); else bump(w, ev);
     for (let i = 0; i < BOXES.length; i++) {
       if (w.boxes[i] > 0) { w.boxes[i] = Math.max(0, w.boxes[i] - dt); continue; }
-      const bs = BOXES[i][0] * tr.L, bp = at(tr, bs), bx = bp.x - bp.ty * -BOXES[i][1], by = bp.y + bp.tx * -BOXES[i][1];
+      const bl = tr.boxes[i][1], bs = BOXES[i][0] * tr.L, bp = at(tr, bs), bx = bp.x - bp.ty * -bl, by = bp.y + bp.tx * -bl;
       for (const c of w.cars) {
         if (c.fall >= 0 || c.item) continue;
-        if (Math.hypot(c.x - bx, c.y - by) < P.BOX_R + P.CAR_R) {
+        if (tr.geo === 2 ? boxTouches(c, bx, by) : Math.hypot(c.x - bx, c.y - by) < P.BOX_R + P.CAR_R) {
           w.boxes[i] = P.BOX_RESPAWN;
           c.item = ((c.seat + Math.floor(w.t * 7) + i) % 5) < 3 ? 1 : 2;   // boost more often than shield; no random: the server may reproduce a race
           if (ev) ev.push({ k: "item", seat: c.seat, i });
@@ -228,6 +385,13 @@ function stepWorld(w, inputs, ev, racing, dt) {
     }
     w.t += dt;
   }
+}
+
+/* An item box (a ball of BOX_R) meets a car's footprint. */
+function boxTouches(c, bx, by) {
+  const hx = Math.cos(c.h), hy = Math.sin(c.h), dx = bx - c.x, dy = by - c.y;
+  const u = clamp(dx * hx + dy * hy, -P.CAR_HL2, P.CAR_HL2), v = clamp(-dx * hy + dy * hx, -P.CAR_HW2, P.CAR_HW2);
+  return Math.hypot(dx * hx + dy * hy - u, -dx * hy + dy * hx - v) < P.BOX_R;
 }
 
 /* Use the held item (boost: a burst; shield: bumps cannot move you for a while). Returns true when used. */
@@ -255,4 +419,5 @@ function order(w) {
   }).map((c) => c.seat);
 }
 
-module.exports = { heightAt, P, TRACKS, TRACK_NAMES, PADS, BOXES, at, nearest, newWorld, newCar, stepCar, stepWorld, useItem, lapsDone, finished, order, wrapS, clamp, lapOf };
+module.exports = { heightAt, P, TRACKS, TRACKS2, TRACK_NAMES, trackOf, PADS, BOXES, at, nearest, newWorld, newCar, stepCar, stepWorld, useItem, lapsDone, finished, order, wrapS, clamp, lapOf,
+  corners, wallExcess, overlap, boxTouches, onTwoLevels };
