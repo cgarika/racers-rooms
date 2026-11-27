@@ -4,6 +4,10 @@
 const assert = require("assert");
 const S = require("../physics"), B = require("../bots");
 const P = S.P;
+// SHORT=1 (lane R4): every check again on the short car's wide tracks ("car16" rooms: half length CAR_HL2S)
+const SHORT = process.env.SHORT === "1", HL = SHORT ? P.CAR_HL2S : P.CAR_HL2;
+const NW = (name, laps, k, geo) => S.newWorld(name, laps, k, geo, SHORT && geo === 2);
+if (SHORT) console.log("(the short car: half length " + HL + ")");
 let n = 0; const ok = (m) => { n++; console.log("ok  " + m); };
 const EPS = 0.05;   // how far past a wall, or into another car, a footprint may be after a step (none, to a twentieth of a unit)
 
@@ -32,18 +36,18 @@ for (const name of S.TRACK_NAMES) {
   }
 }
 ok("three wide closed tracks (half width 150), no bend tighter than the lane, no two stretches touching except over the Bathtub's bridge");
-assert.strictEqual(S.newWorld("bath", 3, 2).track.halfW, 60); assert.strictEqual(S.newWorld("bath", 3, 2).geo, 1);
+assert.strictEqual(NW("bath", 3, 2).track.halfW, 60); assert.strictEqual(NW("bath", 3, 2).geo, 1);
 ok("a world made without a geometry is the first one (the old apps' track)");
 
 // the grid
 for (const name of S.TRACK_NAMES) for (const k of [1, 2, 3, 4]) {
-  const w = S.newWorld(name, 3, k, 2), tr = w.track;
+  const w = NW(name, 3, k, 2), tr = w.track;
   const line = S.at(tr, 0);
   const s0 = w.cars[0].s;
   for (const c of w.cars) {
     assert(Math.abs(c.s - s0) < 4, name + " " + k + ": every car at the same place along the lane");
     assert(Math.abs(c.h - w.cars[0].h) < 1e-9, "all parallel");
-    const nose = [c.x + Math.cos(c.h) * P.CAR_HL2, c.y + Math.sin(c.h) * P.CAR_HL2];
+    const nose = [c.x + Math.cos(c.h) * HL, c.y + Math.sin(c.h) * HL];
     const toLine = (line.x - nose[0]) * line.tx + (line.y - nose[1]) * line.ty;
     assert(toLine > 0 && toLine < 6, name + " " + k + ": nose " + toLine.toFixed(1) + " behind the line");
     const tan = S.at(tr, c.s);
@@ -51,7 +55,7 @@ for (const name of S.TRACK_NAMES) for (const k of [1, 2, 3, 4]) {
     assert(S.wallExcess(c, tr).e < -3, name + " " + k + ": clear of the walls");
   }
   for (let a = 0; a < k; a++) for (let b = a + 1; b < k; b++) {
-    assert.strictEqual(S.overlap(w.cars[a], w.cars[b]), null, name + " " + k + ": cars " + a + " and " + b + " overlap");
+    assert.strictEqual(S.overlap(w.cars[a], w.cars[b], HL), null, name + " " + k + ": cars " + a + " and " + b + " overlap");
     const gapAcross = Math.hypot(w.cars[a].x - w.cars[b].x, w.cars[a].y - w.cars[b].y) - 2 * P.CAR_HW2;
     assert(gapAcross >= 12.9, "a clear gap between neighbours " + gapAcross);
   }
@@ -72,13 +76,13 @@ function check(w, what, t) {
   }
   for (let a = 0; a < cs.length; a++) for (let b = a + 1; b < cs.length; b++) {
     if (S.onTwoLevels(w.track, cs[a], cs[b])) continue;   // one on the bridge, one under it
-    const o = S.overlap(cs[a], cs[b]);
+    const o = S.overlap(cs[a], cs[b], HL);
     assert(!o || o.o <= EPS, what + ": cars " + a + " and " + b + " overlap " + (o && o.o.toFixed(3)) + " at t " + t.toFixed(2));
   }
 }
 let steps = 0, worstWall = -1e9, worstCar = 0;
 function race(name, levels, hands, seconds, seed, what) {
-  const k = levels.length, w = S.newWorld(name, 3, k, 2), mems = levels.map((_, i) => B.newMem(i, seed * 100 + i));
+  const k = levels.length, w = NW(name, 3, k, 2), mems = levels.map((_, i) => B.newMem(i, seed * 100 + i));
   const ev = []; let t = 0;
   const hand = hands || (() => null);
   const until = seconds || 240;
@@ -128,7 +132,7 @@ ok("random hands on every track (three bots of them, 70 s each): the footprints 
 // full lock either way (a car going round in circles) and a car aimed into the wall at 40 degrees, held straight: stopped by the wall, slides along, never through it
 for (const name of S.TRACK_NAMES) for (const st of [-1, 1]) {
   race(name, ["hard"], (c, t) => (t < 0.6 ? 0 : st), 12, 3, name + " full lock " + st);
-  const w = S.newWorld(name, 3, 1, 2), c = w.cars[0], ev = [];
+  const w = NW(name, 3, 1, 2), c = w.cars[0], ev = [];
   c.h += st * 0.7;
   let metAt = -1, i = 0;
   for (i = 0; i < 120 * 6 && (metAt < 0 || i < metAt + 60); i++) { S.stepWorld(w, [0], ev, true, P.DT); check(w, name + " into the wall " + st, i * P.DT); if (metAt < 0 && ev.some((e) => e.k === "wall")) metAt = i; }
@@ -144,12 +148,12 @@ ok("four abreast all steering into one wall from the start: pressed together aga
 
 // a bump: two cars meeting square on separate exactly and swap speed; a shield is not moved
 {
-  const w = S.newWorld("bath", 3, 2, 2), a = w.cars[0], b = w.cars[1];
-  b.x = a.x + Math.cos(a.h) * (2 * P.CAR_HL2 - 6); b.y = a.y + Math.sin(a.h) * (2 * P.CAR_HL2 - 6); b.h = a.h;
+  const w = NW("bath", 3, 2, 2), a = w.cars[0], b = w.cars[1];
+  b.x = a.x + Math.cos(a.h) * (2 * HL - 6); b.y = a.y + Math.sin(a.h) * (2 * HL - 6); b.h = a.h;
   a.vx = Math.cos(a.h) * 120; a.vy = Math.sin(a.h) * 120; b.vx = b.vy = 0;
   const ev = [];
   S.stepWorld(w, [0, 0], ev, true, P.DT);
-  assert.strictEqual(S.overlap(a, b), null, "apart");
+  assert.strictEqual(S.overlap(a, b, HL), null, "apart");
   assert(b.vx * Math.cos(a.h) + b.vy * Math.sin(a.h) > 60, "the one behind passes its speed on");
   assert(ev.some((e) => e.k === "hit"), "a hit");
   ok("a car running into the back of another: pushed apart to the footprint, the speed passed on, a hit");
@@ -170,7 +174,7 @@ ok("four abreast all steering into one wall from the start: pressed together aga
     if (Math.abs(nr.d) < tr.halfW + 16 && Math.abs(nr.s - low) < 700) { over++; assert(S.heightAt(tr, s) >= 60, "the bridge is high enough over the lane beneath at " + s.toFixed(0) + " (" + S.heightAt(tr, s).toFixed(0) + ")"); }
   }
   assert(over > 100);
-  const w = S.newWorld("bath", 3, 2, 2), a = w.cars[0], b = w.cars[1];
+  const w = NW("bath", 3, 2, 2), a = w.cars[0], b = w.cars[1];
   const pl = (c, s) => { const q = S.at(tr, s); c.x = q.x; c.y = q.y; c.h = Math.atan2(q.ty, q.tx); c.s = s; c.idx = Math.round(s / tr.sp) % tr.n; c.vx = q.tx * 100; c.vy = q.ty * 100; };
   pl(a, mid); pl(b, low);
   S.stepWorld(w, [0, 0], [], true, P.DT);
@@ -179,7 +183,7 @@ ok("four abreast all steering into one wall from the start: pressed together aga
 }
 // item boxes and pads still work on the wide lanes
 {
-  const w = S.newWorld("kitchen", 3, 1, 2), c = w.cars[0], ev = [], m = B.newMem(0, 3);
+  const w = NW("kitchen", 3, 1, 2), c = w.cars[0], ev = [], m = B.newMem(0, 3);
   for (let i = 0; i < 120 * 40; i++) { const r = B.think(w, c, "hard", m, P.DT); S.stepWorld(w, [r.steer], ev, true, P.DT); if (r.use) S.useItem(c, ev); }
   assert(ev.some((e) => e.k === "pad"), "pad"); assert(ev.some((e) => e.k === "item"), "item");
   ok("a car meets boost pads and item boxes on a lap of a wide track");

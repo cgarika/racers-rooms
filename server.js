@@ -48,7 +48,7 @@ const TRIAL_MAX_S = Math.max(1, Number(process.env.TRIAL_MAX_S || 75));         
 const SNAP_EVERY = Math.max(1, Number(process.env.SNAP_EVERY || 4));            // one snapshot every 4 steps of 1/120 s: 30 a second
 const NAME_GRAPHEMES = 18;             // one cap on every GameNest server, in whole characters
 /* What an app may say it knows ("caps" on create and join). "grid4" (qa1126): the wide tracks with walls and four cars abreast on the line (physics.js geometry 2). */
-const CAPS = ["grid4"];
+const CAPS = ["grid4", "car16"];   // "car16" (lane R4, 2026-11-26): the short chunky toy car (physics.js CAR_HL2S) on the wide tracks
 const LAPS = [1, 2, 3, 5];
 const TRACKS = ["bath", "kitchen", "toyroom"];   // Bathtub Grand Prix (free), Breakfast Speedway and Midnight Toy Room (GameNest Plus)
 const LEVELS = Bots.LEVELS;
@@ -215,10 +215,17 @@ function geoFor(room) {
   const people = room.players.filter((p) => !p.bot && !p.local && !p.left);
   return people.length > 0 && people.every((p) => Array.isArray(p.caps) && p.caps.includes("grid4")) ? 2 : 1;
 }
-/* The room's track as the apps draw it: its points' count and length, its half width and its geometry (an old app reads n, len and halfW; a new one geo too). */
+/* The short car (physics.js CAR_HL2S) on the wide tracks when every person in the room also has an app that knows it ("car16"); else the long one. An app without
+   it never sees carHL change (a room with one of those plays the long car), and an app older still never plays geometry 2 at all. */
+function shortFor(room) {
+  const people = room.players.filter((p) => !p.bot && !p.local && !p.left);
+  return geoFor(room) === 2 && people.every((p) => Array.isArray(p.caps) && p.caps.includes("car16"));
+}
+/* The room's track as the apps draw it: its points' count and length, its half width, its geometry and the car's half length on it (an old app reads n, len and halfW;
+   a newer one geo; a "car16" one carHL too). */
 function trackView(room) {
-  const tr = room.world ? room.world.track : Sim.trackOf(room.opts.track, geoFor(room));
-  return { n: tr.n, len: Math.round(tr.L), halfW: tr.halfW, geo: tr.geo };
+  const tr = room.world ? room.world.track : Sim.trackOf(room.opts.track, geoFor(room), shortFor(room));
+  return { n: tr.n, len: Math.round(tr.L), halfW: tr.halfW, geo: tr.geo, carHL: tr.carHL };
 }
 
 function sendState(code) {
@@ -262,7 +269,7 @@ function startMatch(room) {
   }
   room.trial = null;
   gearBots(room);
-  room.world = Sim.newWorld(room.opts.track, room.opts.laps, room.players.length, geoFor(room));
+  room.world = Sim.newWorld(room.opts.track, room.opts.laps, room.players.length, geoFor(room), shortFor(room));
   for (const c of room.world.cars) { c.fx = gearOf(room, room.players[c.seat]); c.lapsSeen = 0; c.lapStart = 0; c.lapBest = 0; }   // gear: the seat's engine, tyres and boost (null at the base)
   setPhase(room, "countdown", COUNTDOWN_MS);
   room.log = `Get ready! ${room.opts.laps} lap${room.opts.laps === 1 ? "" : "s"}.`;
@@ -271,7 +278,7 @@ function startMatch(room) {
 /* A time trial's turn: one car alone, its seat's. */
 function startTurn(room) {
   const seat = room.trial.order[room.trial.turn];
-  room.world = Sim.newWorld(room.opts.track, room.opts.laps, 1, geoFor(room));
+  room.world = Sim.newWorld(room.opts.track, room.opts.laps, 1, geoFor(room), shortFor(room));
   const c = room.world.cars[0];
   c.seat = seat; c.lapsSeen = 0; c.lapStart = 0; c.lapBest = 0;
   room.firstHomeAt = 0;

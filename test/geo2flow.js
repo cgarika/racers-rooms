@@ -76,6 +76,31 @@ const ok = (m) => { n++; console.log("ok  " + m); };
     f.s.emit("leave", {});
     await wait(() => e.room.track.geo === 2, "wide again", 3000);
     ok("the lobby follows who is in it: wide again when the old app leaves");
+    // the short car (lane R4): a room of apps that all say "car16" plays it; one build-365 app ("grid4" only) keeps the long car, and nobody sees a footprint it does not know
+    assert.strictEqual(a.room.track.carHL, 63);
+    const g = mk("Gus", ["grid4", "car16"]);
+    await g.create();
+    const h = mk("Hal", ["waitList", "grid4", "car16"]);
+    await h.join(g.joined.code);
+    g.s.emit("addBot", { level: "hard" }); g.s.emit("addBot", { level: "normal" });
+    await wait(() => g.room && g.room.players.length === 4, "short four");
+    assert.strictEqual(g.room.track.geo, 2); assert.strictEqual(g.room.track.carHL, 50); assert.strictEqual(g.room.track.halfW, 150);
+    g.s.emit("start", {});
+    await wait(() => g.room.phase === "countdown" && g.snaps.length > 0, "short countdown");
+    const ws = Sim.newWorld("bath", 3, 4, 2, true);
+    for (const r of g.snaps[g.snaps.length - 1].c) { const q = ws.cars[r[0]]; assert(Math.abs(r[1] - q.x) < 0.02 && Math.abs(r[2] - q.y) < 0.02, "seat " + r[0] + " on the short grid"); }
+    ok("a room of \"car16\" apps plays the short car (track.carHL 50): its grid stands the short cars' noses on the line");
+    const i = mk("Ivy", ["grid4", "car16"]);
+    await i.create();
+    const j = mk("Jon", ["grid4"]);   // build 365
+    await j.join(i.joined.code);
+    await wait(() => i.room && i.room.players.length === 2, "mixed short");
+    assert.strictEqual(i.room.track.geo, 2); assert.strictEqual(i.room.track.carHL, 63);
+    i.s.emit("start", {});
+    await wait(() => i.room.phase === "countdown" && i.snaps.length > 0, "mixed countdown");
+    const wl = Sim.newWorld("bath", 3, 2, 2);
+    for (const r of i.snaps[i.snaps.length - 1].c) { const q = wl.cars[r[0]]; assert(Math.abs(r[1] - q.x) < 0.02 && Math.abs(r[2] - q.y) < 0.02, "long grid"); }
+    ok("one app without \"car16\" (build 365): the long car's footprint and grid, as that app expects (carHL 63)");
   } finally {
     for (const c of clients) c.s.close();
     srv.kill();

@@ -7,7 +7,9 @@
 
    Geometry 2 (qa1126, the owner: "cars should start from the start line together" and "car and walls are overlapping"): wider tracks (tracks.json tracks2, HALF_W2 each side)
    with solid walls, a car's real footprint (an oriented box CAR_L2 by CAR_W2, the size of the drawn body) kept inside the walls and clear of the other cars every step,
-   and four cars abreast on the start line. A room plays it when every person's app says so ("grid4" in its caps, server.js); the first geometry stays as it was. */
+   and four cars abreast on the start line. A room plays it when every person's app says so ("grid4" in its caps, server.js); the first geometry stays as it was.
+   The short car (lane R4, 2026-11-26, the owner: "the cars are not good"): the new chunky toy car is 100 long, not 126 (CAR_HL2S), on the same wide tracks (TRACKS2S);
+   a room plays it when every person's app also says "car16". */
 "use strict";
 const DATA = require("./tracks.json");
 
@@ -35,6 +37,7 @@ const P = Object.freeze({
   BRIDGE_H: 90,
   // geometry 2: the footprint (half its length and half its width: the drawn car, wheels and all, is 125 by 61), the walls, the grid
   CAR_HL2: 63, CAR_HW2: 31,
+  CAR_HL2S: 50,              // the short car's half length ("car16" apps: the chunky toy car, 100 by 62); the width is the same
   WALL_E: 0.2,               // what a wall gives back of the speed into it
   WALL_SCRAPE: 0.6,          // the share of the speed along the wall a full-on hit takes off (a glance takes little)
   WALL_TURN: 0.45,           // how much of the angle into the wall a hit turns the car (it glances off along it)
@@ -48,15 +51,16 @@ const P = Object.freeze({
 const PADS = [[0.17, 0], [0.50, 0], [0.82, 0]];
 const BOXES = [[0.11, -30], [0.11, 30], [0.40, -30], [0.40, 30], [0.69, -30], [0.69, 30]];
 
-const TRACKS = {}, TRACKS2 = {};
+const TRACKS = {}, TRACKS2 = {}, TRACKS2S = {};
 for (const [name, t] of Object.entries(DATA.tracks)) TRACKS[name] = makeTrack(name, t.pts, t.bridge, 1);
 for (const [name, t] of Object.entries(DATA.tracks2)) TRACKS2[name] = makeTrack(name, t.pts, t.bridge, 2);
+for (const [name, t] of Object.entries(DATA.tracks2)) TRACKS2S[name] = makeTrack(name, t.pts, t.bridge, 2, P.CAR_HL2S);
 const TRACK_NAMES = Object.keys(TRACKS);
-/* A track by its name and geometry (1, the first; 2, the wide one); the Bathtub when the name is not one. */
-const trackOf = (name, geo) => (geo === 2 ? TRACKS2[name] || TRACKS2.bath : TRACKS[name] || TRACKS.bath);
+/* A track by its name and geometry (1, the first; 2, the wide one; short: the wide one with the short car); the Bathtub when the name is not one. */
+const trackOf = (name, geo, short) => (geo === 2 ? (short ? TRACKS2S[name] || TRACKS2S.bath : TRACKS2[name] || TRACKS2.bath) : TRACKS[name] || TRACKS.bath);
 
 
-function makeTrack(name, pts, bridge, geo) {
+function makeTrack(name, pts, bridge, geo, carHL) {
   const n = pts.length, tan = [];
   let L = 0;
   for (let i = 0; i < n; i++) L += Math.hypot(pts[(i + 1) % n][0] - pts[i][0], pts[(i + 1) % n][1] - pts[i][1]);
@@ -65,7 +69,7 @@ function makeTrack(name, pts, bridge, geo) {
     const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.hypot(dx, dy) || 1;
     tan.push([dx / d, dy / d]);
   }
-  return { name, pts, tan, n, L, sp: L / n, bridge: bridge || null, geo, halfW: geo === 2 ? DATA.halfW2 : DATA.halfW, ramp: geo === 2 ? P.RAMP2 : P.RAMP,
+  return { name, pts, tan, n, L, sp: L / n, bridge: bridge || null, geo, carHL: carHL || P.CAR_HL2, halfW: geo === 2 ? DATA.halfW2 : DATA.halfW, ramp: geo === 2 ? P.RAMP2 : P.RAMP,
     boxes: geo === 2 ? BOXES.map((b) => [b[0], Math.sign(b[1]) * P.BOX_LAT2]) : BOXES };
 }
 
@@ -114,7 +118,7 @@ function newCar(seat, tr, count) {
     /* Geometry 2: every car on the line, side by side, noses GRID_BACK2 behind it, facing down the lane; the field centred across the lane (two cars take the middle two places). */
     /* (all parallel, square to the line, as a real grid: on the straight the line stands on, each is on its lane's heading) */
     const k = Math.max(1, Math.min(4, count || 4));
-    const lane = (seat - (k - 1) / 2) * P.GRID_PITCH2, back = P.GRID_BACK2 + P.CAR_HL2;
+    const lane = (seat - (k - 1) / 2) * P.GRID_PITCH2, back = P.GRID_BACK2 + tr.carHL;
     const c = at(tr, 0);
     const x = c.x - c.ty * lane - c.tx * back, y = c.y + c.tx * lane - c.ty * back;
     const nr = nearest(tr, x, y, Math.round((tr.L - back) / tr.sp) % tr.n);
@@ -134,8 +138,8 @@ function newCar(seat, tr, count) {
     idx: Math.round(s / tr.sp) % tr.n, s, dist: s - tr.L, fall: -1, ghost: 0, finishAt: -1, lastOk: s, hits: 0,
   };
 }
-function newWorld(trackName, laps, seats, geo) {
-  const tr = trackOf(trackName, geo === 2 ? 2 : 1);
+function newWorld(trackName, laps, seats, geo, short) {
+  const tr = trackOf(trackName, geo === 2 ? 2 : 1, short);
   const w = { track: tr, geo: tr.geo, laps: laps || P.LAPS, cars: [], boxes: BOXES.map(() => 0), t: 0 };
   for (let i = 0; i < seats; i++) w.cars.push(newCar(i, tr, seats));
   return w;
@@ -210,16 +214,16 @@ function stepCar(c, input, dt, w, ev, racing) {
 /* ---- geometry 2: the footprint, the walls, two cars meeting ---- */
 
 const CORNERS = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
-/* The four corners of a car's footprint (its heading h, half length CAR_HL2 along it, half width CAR_HW2 across). */
-function corners(c) {
-  const hx = Math.cos(c.h), hy = Math.sin(c.h), a = P.CAR_HL2, b = P.CAR_HW2;
+/* The four corners of a car's footprint (its heading h, half length hl along it (the track's carHL), half width CAR_HW2 across). */
+function corners(c, hl = P.CAR_HL2) {
+  const hx = Math.cos(c.h), hy = Math.sin(c.h), a = hl, b = P.CAR_HW2;
   return CORNERS.map(([u, v]) => [c.x + hx * u * a - hy * v * b, c.y + hy * u * a + hx * v * b]);
 }
 /* How far the car's worst corner is past a wall (0 or less: inside), and the wall's outward normal there. Corners are looked for round the car's own place on the
    lane, so under the bridge a car is held by its own lane's walls, not the other pass's. */
 function wallExcess(c, tr) {
   let worst = -1e9, nx = 0, ny = 0;
-  for (const [px, py] of corners(c)) {
+  for (const [px, py] of corners(c, tr.carHL)) {
     const nr = nearest(tr, px, py, c.idx, 30);
     const e = Math.abs(nr.d) - tr.halfW;
     if (e > worst) { worst = e; const t = tr.tan[nr.i], sg = nr.d > 0 ? 1 : -1; nx = -t[1] * sg; ny = t[0] * sg; }
@@ -257,10 +261,10 @@ function walls(c, tr, ev) {
   return hit;
 }
 /* Two footprints: the overlap along the axis it is least (n points from a to b), or null when they are apart. */
-function overlap(a, b) {
+function overlap(a, b, hl = P.CAR_HL2) {
   const ha = [Math.cos(a.h), Math.sin(a.h)], hb = [Math.cos(b.h), Math.sin(b.h)];
   const axes = [ha, [-ha[1], ha[0]], hb, [-hb[1], hb[0]]];
-  const dx = b.x - a.x, dy = b.y - a.y, A = P.CAR_HL2, B = P.CAR_HW2;
+  const dx = b.x - a.x, dy = b.y - a.y, A = hl, B = P.CAR_HW2;
   let best = 1e9, nx = 0, ny = 0;
   for (const [ux, uy] of axes) {
     const ra = A * Math.abs(ha[0] * ux + ha[1] * uy) + B * Math.abs(-ha[1] * ux + ha[0] * uy);
@@ -277,8 +281,8 @@ function onTwoLevels(tr, A, B) {
   return ds > 4 * P.CAR_HL2 && Math.abs(heightAt(tr, A.s) - heightAt(tr, B.s)) > 40;
 }
 /* How deep two footprints overlap along one axis (n, unit): their projections' overlap. */
-function depthAlong(a, b, nx, ny) {
-  const ha = [Math.cos(a.h), Math.sin(a.h)], hb = [Math.cos(b.h), Math.sin(b.h)], A = P.CAR_HL2, Bw = P.CAR_HW2;
+function depthAlong(a, b, nx, ny, hl = P.CAR_HL2) {
+  const ha = [Math.cos(a.h), Math.sin(a.h)], hb = [Math.cos(b.h), Math.sin(b.h)], A = hl, Bw = P.CAR_HW2;
   const ra = A * Math.abs(ha[0] * nx + ha[1] * ny) + Bw * Math.abs(-ha[1] * nx + ha[0] * ny);
   const rb = A * Math.abs(hb[0] * nx + hb[1] * ny) + Bw * Math.abs(-hb[1] * nx + hb[0] * ny);
   return ra + rb - Math.abs((b.x - a.x) * nx + (b.y - a.y) * ny);
@@ -290,7 +294,7 @@ function bump2(w, ev, round) {
     const A = cs[a], B = cs[b];
     if (A.fall >= 0 || B.fall >= 0) continue;
     if (onTwoLevels(w.track, A, B)) continue;
-    const ov = overlap(A, B);
+    const ov = overlap(A, B, w.track.carHL);
     if (!ov) continue;
     any = true; A.jam = B.jam = true;
     let { nx, ny, o } = ov;
@@ -300,7 +304,7 @@ function bump2(w, ev, round) {
       let ds = B.s - A.s; if (ds > w.track.L / 2) ds -= w.track.L; else if (ds < -w.track.L / 2) ds += w.track.L;
       const t = w.track.tan[A.idx], sg = ds >= 0 ? 1 : -1;
       nx = t[0] * sg; ny = t[1] * sg;
-      o = Math.max(0, depthAlong(A, B, nx, ny));   // (the whole depth along that axis: one push parts them)
+      o = Math.max(0, depthAlong(A, B, nx, ny, w.track.carHL));   // (the whole depth along that axis: one push parts them)
     }
     const sa = A.shield > 0 && !(B.shield > 0), sb = B.shield > 0 && !(A.shield > 0);   // (two shields meet as two cars)
     let wa = sa ? 0 : sb ? 2 : 1, wb = sb ? 0 : sa ? 2 : 1;
@@ -391,7 +395,7 @@ function stepWorld(w, inputs, ev, racing, dt) {
       const bl = tr.boxes[i][1], bs = BOXES[i][0] * tr.L, bp = at(tr, bs), bx = bp.x - bp.ty * -bl, by = bp.y + bp.tx * -bl;
       for (const c of w.cars) {
         if (c.fall >= 0 || c.item) continue;
-        if (tr.geo === 2 ? boxTouches(c, bx, by) : Math.hypot(c.x - bx, c.y - by) < P.BOX_R + P.CAR_R) {
+        if (tr.geo === 2 ? boxTouches(c, bx, by, tr.carHL) : Math.hypot(c.x - bx, c.y - by) < P.BOX_R + P.CAR_R) {
           w.boxes[i] = P.BOX_RESPAWN;
           c.item = ((c.seat + Math.floor(w.t * 7) + i) % 5) < 3 ? 1 : 2;   // boost more often than shield; no random: the server may reproduce a race
           if (ev) ev.push({ k: "item", seat: c.seat, i });
@@ -404,9 +408,9 @@ function stepWorld(w, inputs, ev, racing, dt) {
 }
 
 /* An item box (a ball of BOX_R) meets a car's footprint. */
-function boxTouches(c, bx, by) {
+function boxTouches(c, bx, by, hl = P.CAR_HL2) {
   const hx = Math.cos(c.h), hy = Math.sin(c.h), dx = bx - c.x, dy = by - c.y;
-  const u = clamp(dx * hx + dy * hy, -P.CAR_HL2, P.CAR_HL2), v = clamp(-dx * hy + dy * hx, -P.CAR_HW2, P.CAR_HW2);
+  const u = clamp(dx * hx + dy * hy, -hl, hl), v = clamp(-dx * hy + dy * hx, -P.CAR_HW2, P.CAR_HW2);
   return Math.hypot(dx * hx + dy * hy - u, -dx * hy + dy * hx - v) < P.BOX_R;
 }
 
@@ -435,5 +439,5 @@ function order(w) {
   }).map((c) => c.seat);
 }
 
-module.exports = { heightAt, P, TRACKS, TRACKS2, TRACK_NAMES, trackOf, PADS, BOXES, at, nearest, newWorld, newCar, stepCar, stepWorld, useItem, lapsDone, finished, order, wrapS, clamp, lapOf,
+module.exports = { heightAt, P, TRACKS, TRACKS2, TRACKS2S, TRACK_NAMES, trackOf, PADS, BOXES, at, nearest, newWorld, newCar, stepCar, stepWorld, useItem, lapsDone, finished, order, wrapS, clamp, lapOf,
   corners, wallExcess, overlap, boxTouches, onTwoLevels };
